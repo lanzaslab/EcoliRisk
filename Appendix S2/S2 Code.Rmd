@@ -1,0 +1,862 @@
+---
+title: "Appendix S2: Contact- and social-network creation"
+author: "Trevor Farthing"
+date: "03/21/2019"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#The goal of this code is to generate dyad-level covariates to be included in survival analyses.
+
+Specifically, we create weekly undirected social and weighted-contact network edge sets to be appended to our survival data (see Appendix S3).
+
+## First, we must load the empirical point-location data sets
+
+These data were collected during 2017 and 2018 field seasons. These data sets were already filtered and processed in accordance with procedures described by Dawson et al. (2019). We will call these data sets "data2017_10SecAgg" and "data2018_10SecAgg" respectively, because they were previously aggregated to 10-second intervals. Therefore, each point-location represents animals' average location at each 10-second interval over the data sets (see Appendix S1). data2017_10SecAgg and data2018_10SecAgg contain 19,942,298 and 10,493,429 observations, respectively. Each data set contains the same four columns, described in detail below.
+
+ID: Unique ids for calves within the study.
+xloc: Averaged x-coordinate value observed for any given 10-second timestamp.
+yloc: Averaged y-coordinate value observed for any given 10-second timestamp.
+dateTime: Unique timestamp.
+
+
+```{r load point-locations,eval=FALSE}
+load("data2017_10SecAgg.RData")
+load("data2018_10SecAgg.RData")
+
+#We also load in necessary libraries here.
+library(contact)
+library(foreach)
+library(ggplot2)
+
+```
+## Remove dates
+
+Here we remove the first 3 days (i.e., when calves enter the study at different times, and are acclimating to their new environment) and the final day (i.e., when calves exit the study at different times) from the data. 
+
+```{r removeDates,eval=FALSE}
+
+data2017.10SecAgg$date <- lubridate::date( data2017_10SecAgg$dateTime) #add dates
+data2017.dates<- unique(data2017.10SecAgg$date) #pull the dates
+data2017.dates<- data2017.dates[order(data2017.dates)] #ensure they are ordered correctly
+data2017.10SecAgg<- droplevels(data2017.10SecAgg[- c(which(data2017.10SecAgg$date < data2017.dates[4]), which(data2017.10SecAgg$date == data2017.dates[length(data2017.dates)])),]) #remove the first 3 and last dates from the data set
+
+data2018.10SecAgg$date <- lubridate::date( data2018.10SecAgg$dateTime) #add dates
+data2018.dates<- unique(data2018.10SecAgg$date) #pull the dates
+data2018.dates<- data2018.dates[order(data2018.dates)] #ensure they are ordered correctly
+data2018.10SecAgg<- droplevels(data2018.10SecAgg[- c(which(data2018.10SecAgg$date < data2018.dates[4]), which(data2018.10SecAgg$date == data2018.dates[length(data2018.dates)])),]) #remove the first 3 and last dates from the data set
+
+```
+
+
+## Create randomized data sets
+
+Below we create 100 randomized-set replicates of each data set. Randomization procedures are based on methods described by Spiegel et al. 2016. That is, each replicate is created by shuffling individuals' daily movement paths across the length of the data set. 
+
+```{r randomize data, eval = FALSE}
+
+system.time(data2017_10SecAgg.rand <- contact::randomizePaths(x = data2017_10SecAgg, id = data2017.10SecAgg$ID, dateTime = data2017.10SecAgg$dateTime, point.x = data2017.10SecAgg$xloc, point.y = data2017.10SecAgg$yloc, dataType = "Point", blocking = TRUE, blockUnit = "days", blockLength = 1, shuffle.type = 1, indivPaths = TRUE, numRandomizations = 100, reduceOutput = TRUE))
+
+system.time(data2018_10SecAgg.rand <- contact::randomizePaths(x = data2018_10SecAgg, id = data2018.10SecAgg$ID, dateTime = data2018.10SecAgg$dateTime, point.x = data2018.10SecAgg$xloc, point.y = data2018.10SecAgg$yloc, dataType = "Point", blocking = TRUE, blockUnit = "days", blockLength = 1, shuffle.type = 1, indivPaths = TRUE, numRandomizations = 100, reduceOutput = TRUE))
+
+
+```
+
+
+##Adjust contact definintions to account for RTLS accuracy
+
+Here we use the findDistThresh function from the "contact" R package (v.1.2.5) to identify what spatial thresholds for contact likely report the majority of contacts in the calves system, previously defined as instances where individuals were within 0.5 m of one another for point-location-based contacts (Farthing et al. 2020). Note that the accuracy of the RTLS used to collect the calves data was said to be "90% of points fall within 0.5 m of true locations" (Farthing et al. 2020).
+
+```{r (Account for RTLS accuracy), eval=FALSE}
+
+#Point-location-based contacts
+contactThresh.point<-contact::findDistThresh(n = 1000000, acc.Dist1 = 0.5, acc.Dist2 = NULL, pWithin1 = 90, pWithin2 = NULL, spTh = 0.5)
+
+contactThresh.point_99<-unname(signif(contactThresh.point[21], 2)) #round the 99-percent CI value to 2 decimal places
+
+#Note that because these confidence intervals are obtained from distributions generated from random samples, every time this function is run, results will be slightly different. When we ran the function, the outputs indicated that adjusted spatial thresholds of 0.71 m likely capture the majority of contacts as previously defined for contacts in this system.
+
+```
+
+##Create inter-calf contact networks
+
+Here we generate edge sets describing point-location-based contacts between calves in empirical and random data sets. Note that "contact" is defined as occurring when individuals are within the distance previously noted to likely capture the majority of true contacts (i.e., 0.71 m for point-location).
+
+To do this, we first create inter-calf distance matrices. Then, we use distance thresholds to identify time points when calves were within the specified distance from one another. For both the 2017 and 2018 empirical and randomized data sets, we generate three contact-network edge sets: weekly-blocked, hourly-blocked, and potential. Weekly-blocked and hourly-blocked sets will be used for survival analysis and social network derivation, respectively. The potential network edge set, which details the number of observed time points when individuals were concurrently observed, will be used for social network derivation as well. See the *Methods* section of the main text for a more-detailed description. 
+
+```{r inter-calf contact networks, eval = FALSE}
+
+##empirical inter-calf distances
+
+#2017
+
+point_dist_2017<- contact::dist2All_df(x = data2017_10SecAgg, id = "ID", dateTime = "dateTime", point.x = "xloc", point.y = "yloc", poly.xy = NULL, elev = NULL, parallel = TRUE, nCores = 11, dataType = "Point", lonlat = FALSE) #see that we parallelized this process across 11 cores
+
+#2018
+
+point_dist_2018<- contact::dist2All_df(x = data2018_10SecAgg, id = "ID", dateTime = "dateTime", point.x = "xloc", point.y = "yloc", poly.xy = NULL, elev = NULL, parallel = TRUE, nCores = 11, dataType = "Point", lonlat = FALSE) #see that we parallelized this process across 11 cores
+
+##empirical point-location-based contact network edge sets.
+
+#2017
+
+point_contact_2017hrBlock <- contact::contactDur.all(x = point_dist_2017, dist.threshold= contactThresh.point_99, sec.threshold = 10, blocking = TRUE, blockUnit = "hours", blockLength = 1, blockingStartTime = "2017-05-22 00:00:00", equidistant.time = FALSE, parallel = TRUE, nCores = 3, reportParameters = TRUE) #note that we're interested in blocking by hour here for use in social network creation
+
+emp.summary_2017<-contact::summarizeContacts(x = point_contact_2017hrBlock, importBlocks = TRUE) #summarize the edge set to create weighted edges. 
+
+data2017_potential <- contact::potentialDurations(x = point_dist_2017, blocking = TRUE, blockUnit = "hours", blockingStartTime = "2017-05-22 00:00:00", blockLength = 1) #create set of potential contacts
+
+#2018
+
+point_contact_2018hrBlock <- contact::contactDur.all(x = point_dist_2018, dist.threshold= contactThresh.point_99, sec.threshold = 10, blocking = TRUE, blockUnit = "hours", blockLength = 1, blockingStartTime = "2018-05-21 00:00:00", equidistant.time = FALSE, parallel = TRUE, nCores = 3, reportParameters = TRUE) #note that we're interested in blocking by hour here for use in social network creation
+
+emp.summary_2018<-contact::summarizeContacts(x = point_contact_2018hrBlock, importBlocks = TRUE) #summarize the edge set to create weighted edges. 
+
+data2018_potential <- contact::potentialDurations(x = point_dist_2018, blocking = TRUE, blockUnit = "hours", blockingStartTime = "2018-05-21 00:00:00", blockLength = 1)) #create set of potential contacts
+
+```
+
+
+In order to process our randomized point-location sets into a null contact model, a bit of extra work is needed because of local memory constraints associated with our computing system. Due to the size of the data sets, we cannot compute 100 dist2All_df replicates simultaneously (each one will require approx. 7.8Gb of RAM). Our computer, which has only 16 cores and 64Gb RAM is insufficient to complete this task all at once. Instead, we process and save one random replicate at a time. The contact functions below are parallelized in such a way to maximize our processing speed while allowing limited functionality for simultaneously-running programs. 
+
+Note that we also utilize for-loops in this code block, rather than writing a unique function to carry out processes, to prevent the object duplication that takes place when writing function inputs to function-specific environments (i.e., using for-loops here is innefficient in terms of the amount of code that must be written, but relatively more efficient in terms of local memory usage). 
+
+```{r NULL model creation and comparison, eval = FALSE}
+
+#2017
+
+point_contact.2017_rand<- list(NULL) #create empty list to hold randomized contact sets.
+
+save(data2017_10SecAgg.rand, file = "data2017_10SecAgg_rand.RData") #this is a large file that takes up a relatively large amount of local memory. We save it so that we may remove it and add it back in at will in order to maximize local memory available for data processing.
+
+for(i in 1:100){
+  
+  load("data2017_10SecAgg_rand.RData") #ensure the randomized set list is loaded into the environment.
+
+  data1 <- data2017_10SecAgg_rand[[i]] #pull a single randomized set from the list. 
+
+  rm(data2017_10SecAgg_rand); gc() #remove to free up local memory
+
+  rand.rep <- unique(data1$rand.rep) #pull out the random_replicate ID
+
+  system.time(data.dist <- contact::dist2All_df(x = data1, id = "id", dateTime = "dateTime", point.x = "x.rand", point.y = "y.rand", poly.xy = NULL, elev = NULL, parallel = TRUE, nCores = 13, dataType = "Point", lonlat = FALSE)) #create distance file. Note that we bind the resulting list entries together into a single dataframe.
+
+  rm(data1); gc() #remove to free up local memory
+
+  system.time(data.contact <- contact::contactDur.all(x = data.dist, dist.threshold= contactThresh.point_99, sec.threshold = 10, blocking = TRUE, blockUnit = "hours", blockLength = 1, blockingStartTime = "2017-05-22 00:00:00", equidistant.time = FALSE, parallel = TRUE, nCores = 3, reportParameters = TRUE)) #create contact-network edge set
+
+  point_contact.2017_rand[[i]] <- data.contact #bind the randomized contact set to the previously-empty list
+
+  rm(list = c("data.contact","data.dist")) ; gc() #clear unneeded objects from the environment to free up local memory
+}
+
+#summarize the contact network just as we did for the empirical sets
+rand.summary_2017<-contact::summarizeContacts(x = point_contact.2017_rand, importBlocks = TRUE, avg = TRUE, parallel = TRUE, nCores = 12) #see that avg = TRUE. This averages contact frequencies across time blocks, which in this case is "hours."
+
+rand.summary_2017 <- rand.summary_2017[["avg."]] ; gc() #drop everything in the rand.summary_2017 list except for the averaged contact summary object. 
+
+#2018
+
+point_contact.2018_rand<- list(NULL) #create empty list to hold randomized contact sets.
+
+save(data2018_10SecAgg.rand, file = "data2018_10SecAgg_rand.RData") #this is a large file that takes up a relatively large amount of local memory. We save it so that we may remove it and add it back in at will in order to maximize local memory available for data processing.
+
+for(i in 1:100){
+  
+  load("data2018_10SecAgg_rand.RData") #ensure the randomized set list is loaded into the environment.
+
+  data1 <- data2018_10SecAgg_rand[[i]] #pull a single randomized set from the list. 
+
+  rm(data2018_10SecAgg_rand); gc() #remove to free up local memory
+
+  rand.rep <- unique(data1$rand.rep) #pull out the random_replicate ID
+
+  system.time(data.dist <- contact::dist2All_df(x = data1, id = "id", dateTime = "dateTime", point.x = "x.rand", point.y = "y.rand", poly.xy = NULL, elev = NULL, parallel = TRUE, nCores = 13, dataType = "Point", lonlat = FALSE)) #create distance file. Note that we bind the resulting list entries together into a single dataframe.
+
+  rm(data1); gc() #remove to free up local memory
+
+  system.time(data.contact <- contact::contactDur.all(x = data.dist, dist.threshold= contactThresh.point_99, sec.threshold = 10, blocking = TRUE, blockUnit = "hours", blockLength = 1, blockingStartTime = "2018-05-22 00:00:00", equidistant.time = FALSE, parallel = TRUE, nCores = 3, reportParameters = TRUE)) #create contact-network edge set
+
+  point_contact.2018_rand[[i]] <- data.contact #bind the randomized contact set to the previously-empty list
+
+  rm(list = c("data.contact","data.dist")) ; gc() #clear unneeded objects from the environment to free up local memory
+}
+
+#summarize the contact network just as we did for the empirical sets
+rand.summary_2018<-contact::summarizeContacts(x = point_contact.2018_rand, importBlocks = TRUE, avg = TRUE, parallel = TRUE, nCores = 12) #see that avg = TRUE. This averages contact frequencies across time blocks, which in this case is "hours."
+
+rand.summary_2018 <- rand.summary_2018[["avg."]] ; gc() #drop everything in the rand.summary_2018 list except for the averaged contact summary object. 
+
+```
+
+## Weekly Aggregation
+
+Here we take the 2017 and 2018 hourly observed and potential contact summaries and aggregate the data into weekly sum counts. Prior to doing this, we break the active-hour (i.e., hours when calves seem to be relatively more active) and inactive-hour (i.e., hours when calves seem to be relatively less active) data sets. We do this because preliminary data suggest different behavioral patterns and information content (i.e., there are fewer point-locations reported in active hours than in inactive ones, potentially due to greater radio interference by roaming bodies during daytime hours) between the two sets (See Appendix S1).
+
+First, let's write the weekly aggregation function.
+
+```{r agg function, eval = FALSE}
+
+#This function will redefine hour blocks as weekly blocks, and carries out the designated "FUN" sub-function within weekly blocks.
+
+aggregateUp <- function(x, blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2017-05-22 00:00:00", FUN = "sum"){
+  
+  newTimeBlocks <- contact::timeBlock.append(x = x, dateTime = x$block.end, blockLength = blockLength.new, blockUnit = blockUnit.new, blockingStartTime = blockingStartTime.new) #creates the new timeblock vectors
+  if(is.na(match("numBlocks", colnames(x))) == TRUE){ #if there is no numBlocks column in x, remove it from newTimeBlocks
+    newTimeBlocks <- newTimeBlocks[,-match("numBlocks", colnames(newTimeBlocks))]
+  }
+  
+  for(m in 2:(match("block", colnames(newTimeBlocks)) - 1)){ #ensure contact-counting columns are numeric
+    
+    newTimeBlocks[,m] <- as.numeric(newTimeBlocks[,m])
+    
+  }
+  
+
+  upAggList<-foreach::foreach(i = unique(newTimeBlocks$block)) %do% { # for each block
+    
+    outFrame <- NULL #create empty data frame to be output
+    
+    for(j in unique(newTimeBlocks$id)){ #for each id
+      
+      idSub <- droplevels(subset(newTimeBlocks, id == j & block == i)) #subset the data
+      newFrame <- data.frame(matrix(ncol = ncol(idSub) - 1, nrow = 1)) #create new data frame to be bound at output
+      colnames(newFrame)[1:(ncol(idSub) - 1)] <- colnames(idSub)[1:(ncol(idSub) - 1)] #import colnames
+      if(FUN == "sum"){
+      
+        sumBlock <- apply(idSub[,3:(match("block", colnames(idSub)) - 1)], 2, sum) #note that the totalDegree column does not aggregate well by using this shortcut (because there are a finite number of things that can be contacted). We adjust the total degree field below.
+      
+      totalDegree <- 0 #start redefining total degree
+      
+      for(k in grep("_", colnames(idSub))){
+        
+        if (length(which(is.na(idSub[,k]) == FALSE)) > 0){
+          
+          totalDegree <- totalDegree + 1 #update totalDegree if an individual had at least one contact with another node
+          
+        }
+        
+      }
+      
+    }
+      
+      if(FUN == "mean"){
+        
+        sumBlock <- apply(idSub[,3:(match("block", colnames(idSub)) - 1)], 2, mean)
+        totalDegree <- mean(idSub[,2])
+      }
+      
+      if(is.na(match("numBlocks", colnames(idSub))) == TRUE){ #if there is no numBlocks column
+       # newFrame[1,] <- c(j, totalDegree, sumBlock, i, unique(idSub$block.start), unique(idSub$block.end))
+        #it seems like in order to maintain the unique data classes of the input columns in x, we need to add the data back in one at a time....
+        newFrame[1,1] <- j
+        newFrame[1,2] <- totalDegree
+        newFrame[1,3:(length(sumBlock) + 2)] <- as.integer(sumBlock)
+        newFrame[1, ncol(newFrame)-2] <- i
+        newFrame[1, ncol(newFrame)-1] <- unique(idSub$block.start)
+        newFrame[1, ncol(newFrame)] <- unique(idSub$block.end)
+
+      }else{ #if there IS a numBlocks column
+        
+        #newFrame[1,] <- c(j, totalDegree, sumBlock, i, unique(idSub$block.start), unique(idSub$block.end), unique(idSub$numBlocks))
+        #it seems like in order to maintain the unique data classes of the input columns in x, we need to add the data back in one at a time....
+        newFrame[1,1] <- j
+        newFrame[1,2] <- totalDegree
+        newFrame[1,3:(length(sumBlock) + 2)] <- as.integer(sumBlock)
+        newFrame[1, ncol(newFrame)-3] <- i
+        newFrame[1, ncol(newFrame)-2] <- unique(idSub$block.start)
+        newFrame[1, ncol(newFrame)-1] <- unique(idSub$block.end)
+        newFrame[1, ncol(newFrame)] <- unique(idSub$numBlocks)
+        
+      }
+      
+      outFrame <- data.frame(data.table::rbindlist(list(outFrame, newFrame)))
+      
+    }
+    return(outFrame)
+  }
+  
+  upAggFrame <- data.frame(data.table::rbindlist(upAggList)) #bind the foreach output
+  return(upAggFrame)
+}
+
+```
+
+## Review the data
+
+Before we actually aggregate the hourly contact data to the week level, let's look at hourly trends in contact metrics (i.e., per-capita sum contacts and degree) by hour for each year. This information will be used to inform the active/inactive subsetting breakpoints for each year.
+
+```{r hourly contact plots, eval = FALSE}
+
+#per-capita metrics by the hour
+plot.func <- function(emp, rand, hour.vec_emp, hour.vec_rand, year){
+  
+  #bind the hour vectors to the contact summaries 
+  emp$hour <- hour.vec_emp
+  rand$hour <- hour.vec_rand
+  
+  perCap_empContact_hour <- aggregate(totalContactDurations~id+hour, data = emp, FUN = "mean") #empirical contacts by hour
+  perCap_empDegree_hour <- aggregate(totalDegree~id+hour, data = emp, FUN = "mean") #empirical contacts by hour
+  perCap_empContact_hour$totalDegree <- perCap_empDegree_hour$totalDegree #pull the total degree column into the perCap_empContact_hour frame
+  perCap_empContact_hour$set <- "empirical"
+
+  perCap_randContact_hour <- aggregate(totalContactDurations~id+hour, data = rand, FUN = "mean") #randomized contacts by hour
+  perCap_randDegree_hour <- aggregate(totalDegree~id+hour, data = rand, FUN = "mean") #randirical contacts by hour
+  perCap_randContact_hour$totalDegree <- perCap_randDegree_hour$totalDegree #pull the total degree column into the perCap_randContact_hour frame
+  perCap_randContact_hour$set <- "NULL"
+
+  perCap_contact_hour<- data.frame(data.table::rbindlist(list(perCap_empContact_hour, perCap_randContact_hour))) #bind the empirical and randomized sets together
+
+  perCap_contact_hour$hourFactor <- factor(perCap_contact_hour$hour, levels = order(unique(perCap_contact_hour$hour)) - 1) #create a properly ordered factor
+
+   sumContactPlot <- ggplot(perCap_contact_hour, aes(x=hourFactor, y=totalContactDurations, fill=set)) +
+  geom_boxplot(position=position_dodge(1)) +
+        scale_y_continuous(name = "Per-capita mean hourly contact durations") +
+        scale_x_discrete(name = "Hour (UTC)") +
+        labs(title = "Comparison of empirical and NULL model per-capita observed contact durations",
+             caption = paste("Data year: ", year, sep = "")) +
+        theme(axis.line.x = element_line(size = 0.5, colour = "black"),
+              axis.line.y = element_line(size = 0.5, colour = "black"),
+              axis.line = element_line(size=1, colour = "black"),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.border = element_blank(),
+              panel.background = element_blank(),
+              legend.position = "bottom",
+              legend.direction = "horizontal",
+        axis.text.x=element_text(colour="black", size = 18),
+        axis.text.y=element_text(colour="black", size = 18),
+        legend.text = element_text(colour="black", size = 18),
+        axis.title.x=element_text(colour="black", size = 20),
+        axis.title.y=element_text(colour="black", size = 20),
+        title = element_text(colour="black", size = 22),
+        legend.title = element_text(colour="black", size = 20)
+        )
+
+   degreePlot <- ggplot(perCap_contact_hour, aes(x=hourFactor, y=totalDegree, fill=set)) +
+  geom_boxplot(position=position_dodge(1)) +
+        scale_y_continuous(name = "Per-capita mean hourly node degree") +
+        scale_x_discrete(name = "Hour (UTC)", labels = 0:23) +
+        labs(title = "Comparison of empirical and NULL model per-capita observed node degree", caption = paste("Data year: ", year, sep = "")) +
+        theme(axis.line.x = element_line(size = 0.5, colour = "black"),
+              axis.line.y = element_line(size = 0.5, colour = "black"),
+              axis.line = element_line(size=1, colour = "black"),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.border = element_blank(),
+              panel.background = element_blank(),
+              legend.position = "bottom",
+              legend.direction = "horizontal",
+        axis.text.x=element_text(colour="black", size = 18),
+        axis.text.y=element_text(colour="black", size = 18),
+        legend.text = element_text(colour="black", size = 18),
+        axis.title.x=element_text(colour="black", size = 20),
+        axis.title.y=element_text(colour="black", size = 20),
+        title = element_text(colour="black", size = 22),
+        legend.title = element_text(colour="black", size = 20)
+        )
+   
+   return(list(sumContactPlot, degreePlot))
+}
+
+#2017
+
+hour_2017_emp.vec <- lubridate::hour(emp.summary_2017$block.end) #generate a vector of hour information (i.e., 0:23) in the empirical set
+hour_2017_rand.vec <- lubridate::hour(rand.summary_2017$block.end) #generate a vector of hour information (i.e., 0:23) in the randomized set
+
+plots_2017 <- plot.func(emp = emp.summary_2017, rand = rand.summary_2017, hour.vec_emp =  hour_2017_emp.vec, hour.vec_rand =  hour_2017_rand.vec, year = 2017); plots_2017
+
+#2018
+
+rand.summary_2018 <- rand.summary_2018[["avg."]] ; gc() #drop everything in the rand.summary_2018 list except for the averaged contact summary object. 
+
+hour_2018_emp.vec <- lubridate::hour(emp.summary_2018$block.end) #generate a vector of hour information (i.e., 0:23)
+hour_2018_rand.vec <- lubridate::hour(rand.summary_2018$block.end) #generate a vector of hour information (i.e., 0:23)
+
+plots_2018 <- plot.func(emp = emp.summary_2018, rand = rand.summary_2018, hour.vec_emp =  hour_2018_emp.vec, hour.vec_rand =  hour_2018_rand.vec, year = 2018); plots_2018
+```
+
+It looks like between hours 06:00 and 20:00 in 2017 and hours 06:00 and 19:00 in 2018, the null model consistently underpredicts both per-capita contacts and node degree. However, during the other hours in the data sets, the null model over predicts the per-capita node degree. This suggests that these inactive hours are defined by relatively long duration contacts between fewer individuals (what we might expect if animals were sleeping close to one another). It's interesting to note that hourly per-capita contact rates in 2018 are relatively stable throughout the day, as opposed to the trend observed in 2017 where contact rates spike during active hours and peak around feeding time. This contrast may be due to the sparsity of the 2018 point-location data relative to that of 2017, or just differences in herd behavior between years. Given the likely behavioral differences between active and inactive hours, and the additional differences in data sparsity between these hours (see Appendix S1), we chose to define active hoursets for 2017 and 2018 as timepoints between 06:00:00 to 21:59:59 UTM and 06:00:00 to 19:59:59 UTM, respectively. Inactive hoursets for 2017 and 2018 were therefore timepoints between 22:00:00 to 05:59:59 UTM and 20:00:00 to 05:59:59 UTM, respectively.
+
+Note that we decided to only carry active-hour set metrics into the survival analysis (see Appendix S3). That said, here we calculate metrics for the full-, active-, and inactive sets in order to gain a better understanding of the system.
+
+## Aggregate Hourly Subsets
+
+Now we create the aforementioned hour subsets, and aggeregate them all to the weekly block level. Note that we carry out this process for empirical, randomized, and potential contact summaries. 
+
+```{r weekly agg, eval = FALSE}
+
+#2017
+##empirical
+
+system.time(emp.summary_2017_week.full <- aggregateUp(x = emp.summary_2017, blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2017-05-22 00:00:00", FUN = "sum")) #for comparison purposes, let's also aggregate up the full data set. Note the new blockingStartTime is the same as was used to create x.
+
+system.time(emp.summary_2017_week.active <- aggregateUp(x = droplevels(emp.summary_2017[which(hour_2017_emp.vec >= 6 & hour_2017_emp.vec <= 21),]), blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2017-05-22 00:00:00", FUN = "sum")) # aggregate up the activity data set. Note the new blockingStartTime is the same as was used to create x.
+
+system.time(emp.summary_2017_week.inactive <- aggregateUp(x = droplevels(emp.summary_2017[which(hour_2017_emp.vec < 6 | hour_2017_emp.vec > 21),]), blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2017-05-22 00:00:00", FUN = "sum")) # aggregate up the activity data set. Note the new blockingStartTime is the same as was used to create x.
+
+##randomized
+
+system.time(rand.summary_2017_week.full <- aggregateUp(x = rand.summary_2017, blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2017-05-22 00:00:00", FUN = "sum")) #for comparison purposes, let's also aggregate up the full data set. Note the new blockingStartTime is the same as was used to create x.
+
+system.time(rand.summary_2017_week.active <- aggregateUp(x = droplevels(rand.summary_2017[which(hour_2017_rand.vec >= 6 & hour_2017_rand.vec <= 21),]), blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2017-05-22 00:00:00", FUN = "sum")) # aggregate up the activity data set. Note the new blockingStartTime is the same as was used to create x.
+
+system.time(rand.summary_2017_week.inactive <- aggregateUp(x = droplevels(rand.summary_2017[which(hour_2017_rand.vec < 6 | hour_2017_rand.vec > 21),]), blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2017-05-22 00:00:00", FUN = "sum")) # aggregate up the activity data set. Note the new blockingStartTime is the same as was used to create x.
+
+##potential
+
+hour_2017_poten.vec <- lubridate::hour(data2017_potential$block.end) #generate a vector of hour information (i.e., 0:23)
+
+system.time(data2017_potential_week.full <- aggregateUp(x = data2017_potential, blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2017-05-22 00:00:00", FUN = "sum")) #for comparison purposes, let's also aggregate up the full data set. Note the new blockingStartTime is the same as was used to create x.
+
+system.time(data2017_potential_week.active <- aggregateUp(x = droplevels(data2017_potential[which(hour_2017_poten.vec >= 6 & hour_2017_poten.vec <= 21),]), blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2017-05-22 00:00:00", FUN = "sum")) # aggregate up the activity data set. Note the new blockingStartTime is the same as was used to create x.
+
+system.time(data2017_potential_week.inactive <- aggregateUp(x = droplevels(data2017_potential[which(hour_2017_poten.vec < 6 | hour_2017_poten.vec > 21),]), blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2017-05-22 00:00:00", FUN = "sum")) # aggregate up the activity data set. Note the new blockingStartTime is the same as was used to create x.
+
+###push these objects into lists to ease later social edge creation
+
+contactSet_2017.emp <- list(emp.summary_2017_week.full, emp.summary_2017_week.active, emp.summary_2017_week.inactive) #empirical list. Note that the order is full, active, inactive.
+contactSet_2017.rand <- list(rand.summary_2017_week.full, rand.summary_2017_week.active, rand.summary_2017_week.inactive) #randomized list. Note that the order is full, active, inactive.
+contactSet_2017_potential <- list(data2017_potential_week.full, data2017_potential_week.active, data2017_potential_week.inactive) #potential list. Note that the order is full, active, inactive.
+
+
+#2018
+##empirical
+
+system.time(emp.summary_2018_week.full <- aggregateUp(x = emp.summary_2018, blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2018-05-21 00:00:00", FUN = "sum")) #for comparison purposes, let's also aggregate up the full data set. Note the new blockingStartTime is the same as was used to create x.
+
+system.time(emp.summary_2018_week.active <- aggregateUp(x = droplevels(emp.summary_2018[which(hour_2018_emp.vec >= 6 & hour_2018_emp.vec <= 19),]), blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2018-05-21 00:00:00", FUN = "sum")) # aggregate up the activity data set. Note the new blockingStartTime is the same as was used to create x.
+
+system.time(emp.summary_2018_week.inactive <- aggregateUp(x = droplevels(emp.summary_2018[which(hour_2018_emp.vec < 6 | hour_2018_emp.vec > 19),]), blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2018-05-21 00:00:00", FUN = "sum")) # aggregate up the activity data set. Note the new blockingStartTime is the same as was used to create x.
+
+##randomized
+
+system.time(rand.summary_2018_week.full <- aggregateUp(x = rand.summary_2018, blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2018-05-21 00:00:00", FUN = "sum")) #for comparison purposes, let's also aggregate up the full data set. Note the new blockingStartTime is the same as was used to create x.
+
+system.time(rand.summary_2018_week.active <- aggregateUp(x = droplevels(rand.summary_2018[which(hour_2018_rand.vec >= 6 & hour_2018_rand.vec <= 19),]), blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2018-05-21 00:00:00", FUN = "sum")) # aggregate up the activity data set. Note the new blockingStartTime is the same as was used to create x.
+
+system.time(rand.summary_2018_week.inactive <- aggregateUp(x = droplevels(rand.summary_2018[which(hour_2018_rand.vec < 6 | hour_2018_rand.vec > 19),]), blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2018-05-21 00:00:00", FUN = "sum")) # aggregate up the activity data set. Note the new blockingStartTime is the same as was used to create x.
+
+##potential
+
+hour_2018_poten.vec <- lubridate::hour(data2018_potential$block.end) #generate a vector of hour information (i.e., 0:23)
+
+system.time(data2018_potential_week.full <- aggregateUp(x = data2018_potential, blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2018-05-21 00:00:00", FUN = "sum")) #for comparison purposes, let's also aggregate up the full data set. Note the new blockingStartTime is the same as was used to create x.
+
+system.time(data2018_potential_week.active <- aggregateUp(x = droplevels(data2018_potential[which(hour_2018_poten.vec >= 6 & hour_2018_poten.vec <= 19),]), blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2018-05-21 00:00:00", FUN = "sum")) # aggregate up the activity data set. Note the new blockingStartTime is the same as was used to create x.
+
+system.time(data2018_potential_week.inactive <- aggregateUp(x = droplevels(data2018_potential[which(hour_2018_poten.vec < 6 | hour_2018_poten.vec > 19),]), blockLength.new = 1, blockUnit.new = "weeks", blockingStartTime.new = "2018-05-21 00:00:00", FUN = "sum")) # aggregate up the activity data set. Note the new blockingStartTime is the same as was used to create x.
+
+###push these objects into lists to ease later social edge creation
+
+contactSet_2018.emp <- list(emp.summary_2018_week.full, emp.summary_2018_week.active, emp.summary_2018_week.inactive) #empirical list. Note that the order is full, active, inactive.
+contactSet_2018.rand <- list(rand.summary_2018_week.full, rand.summary_2018_week.active, rand.summary_2018_week.inactive) #randomized list. Note that the order is full, active, inactive.
+contactSet_2018_potential <- list(data2018_potential_week.full, data2018_potential_week.active, data2018_potential_week.inactive) #potential list. Note that the order is full, active, inactive.
+
+
+```
+
+#Social analysis
+
+Now for each empirical-randomized hourset pair, we use binomial exact tests to determine if contacts happened more or less frequently than we would expect given a random distribution informed by NULL models. We'll do this using foreach loops for convenience. We use binomial exact tests instead of chi-square goodness of fit tests because in the hour-subset null models there are instances when expected contact values are very small, and therefore approximations of p may not be correct. Therefore, we use binomial exact tests to obtain more-accurate estimates.
+
+```{r social analysis, eval = FALSE}
+#2017
+system.time(socialAnalysis_2017 <- foreach(i = 1:3) %do% {
+  
+  contact_binom <- contact::contactCompare_binom(x.summary = contactSet_2017.emp[[i]], y.summary = contactSet_2017.rand[[i]], x_potential = contactSet_2017_potential[[i]], y_potential = NULL, pairContacts = TRUE, totalContacts = FALSE, importBlocks = TRUE, shuffle.type = 1, popLevelOutput = FALSE, parallel = FALSE) #note that because of the randomization process, the empirical potential contact set is the exact same as the randomized one. Therefore, specifying a separate potential contact set here is unnecessary. 
+  
+  return(contact_binom)
+  
+})
+
+#2018
+system.time(socialAnalysis_2018 <- foreach(i = 1:3) %do% {
+  
+  contact_binom <- contact::contactCompare_binom(x.summary = contactSet_2018.emp[[i]], y.summary = contactSet_2018.rand[[i]], x_potential = contactSet_2018_potential[[i]], y_potential = NULL, pairContacts = TRUE, totalContacts = FALSE, importBlocks = TRUE, shuffle.type = 1, popLevelOutput = FALSE, parallel = FALSE) #note that because of the randomization process, the empirical potential contact set is the exact same as the randomized one. Therefore, specifying a separate potential contact set here is unnecessary. 
+  
+  return(contact_binom)
+  
+})
+
+```
+
+#Social Edge Creation
+
+Here we take the output from the previous chunk and decide significant social interactions by thresholding the calculated p-values. Our p-value threshold for deciding significant social interactions will be a bonferonni-corrected value, where the family of statistical tests is the number of dyads to be assessed each year (i.e., 2415). We round this number to 3 significant digits (i.e., 5.18e-6).
+
+```{r social edges, eval = FALSE}
+
+bonf.correc<-signif((0.05/(70*(70 - 1))/2), digits = 3) #calculate the bonferoni-corrected p-value. Note that "70" is used here, because there are 70 calves in each study.
+
+#2017
+system.time(socialEdges_2017 <- foreach(i = 1:3) %do% {
+  
+  socialNetworkEdges <- contact::socialEdges(x = socialAnalysis_2017[[i]], alpha = bonf.correc, weight = NULL, removeDuplicates = FALSE)
+  
+  return(socialNetworkEdges)
+  
+})
+
+system.time(socialEdges_2018 <- foreach(i = 1:3) %do% {
+  
+  socialNetworkEdges <- contact::socialEdges(x = socialAnalysis_2018[[i]], alpha = bonf.correc, weight = NULL, removeDuplicates = FALSE)
+  
+  return(socialNetworkEdges)
+  
+})
+
+```
+
+##Update contact networks
+
+Here we create the weekly weighted undirected contact networks. Edges in these networks will represent and be weighted by the sum weekly dyadic contacts between nodes. There is a function in the contact package called "ntwrkEdges" that takes the output from contact::contactDur.all or contact::contactDur.area and generates a data frame showing the list of edges in the contact network. One of the subfunctions is contact::summarizeContacts, which has already been used to create the contact summaries above. There's no sense in having the function recreate these, so below we recreate the the ntwrkEdges function, forcing it to accept the already-summarized input. 
+
+```{r weekly contacts, eval = FALSE}
+
+#update ntwrkEdges function
+ntwrkEdges2<-function(contactSummary, removeDuplicates = FALSE, parallel = TRUE, nCores = (parallel::detectCores()/2)){
+    
+    block <-NULL #bind this to the global environment to prevent a check flag.
+    
+    if(is.data.frame(contactSummary) == FALSE & is.list(contactSummary) == TRUE){
+      
+      if (parallel == TRUE){
+        
+        cl <- parallel::makeCluster(nCores)
+        doParallel::registerDoParallel(cl)
+        on.exit(parallel::stopCluster(cl))
+        confirmed_edges.list <- foreach::foreach(k = 1:length(contactSummary), .packages = "foreach") %dopar% {
+          
+          contactSummary.frame <- contactSummary[[k]]
+          
+          contactSummary.node1 <- unique(contactSummary.frame$id)
+          contactSummary.node2 <- substring((names(contactSummary.frame[grep("contactDuration_", names(contactSummary.frame))])),22) #pulls out the contacted IDs
+          block_info<-data.frame(block = unique(contactSummary.frame$block), block.start = unique(contactSummary.frame$block.start), block.end = unique(contactSummary.frame$block.end), stringsAsFactors = TRUE) #pulls the block information from contactSummary
+          potential_edges1 <- expand.grid(contactSummary.node1, contactSummary.node2, block_info$block, stringsAsFactors = TRUE) #create a data frame detailing all the potential edges that may have occurred in the dataset (including loops, but loops will ultimately be removed later).
+          names(potential_edges1) <- c("from", "to", "block")
+          potential_edges2<-merge(potential_edges1, block_info, by = "block") #note that this merge reorders the columns, by placing the "block" column first.
+          potential_edges2<-potential_edges2[order(as.numeric(as.character(potential_edges2$block))),] #orders rows by ascending block number.
+          
+            
+            blocks.adjusted<- foreach::foreach(j = unique(potential_edges2$block), .packages = "foreach") %do% { #creates a vector of rows describing duplicated edges.
+              
+              blockSub<- droplevels(subset(potential_edges2, block == j)) #subset the data by block
+              
+              potential.ntwrk <- igraph::simplify(igraph::graph_from_data_frame(blockSub[,c(2,3)], directed = FALSE), remove.multiple = TRUE) #create a simplified network object. Note that we exclude block info from this function (because it will return an error if included)
+              blockSub.edges <- igraph::as_data_frame(potential.ntwrk) #convert back to data frame
+              blockSub.out <- data.frame(block = unique(blockSub$block), from = blockSub.edges$from, to = blockSub.edges$to, block.start = unique(blockSub$block.start), block.end = unique(blockSub$block.end)) #append block info to the simplified data frame & ensure that columns are arranged as they were in potentialEdges2
+              return(blockSub.out) #return the blockSub.out data frame
+            }
+            
+            potential_edges2 <- data.frame(data.table::rbindlist(blocks.adjusted)) #bind the adjusted block sets together to redefine potential_edges2
+          
+          
+edgelist <- foreach(m = 1:nrow(potential_edges2)) %do% { #In a previous iteration, the content of this foreach was contained in a separate apply function called "confirm_edges.Block." for whatever reason, when calling that function an error would be returned. When you run the function contents in a foreach or forloop, however, everything works beautifully. Go figure. 
+  
+  x = droplevels(potential_edges2[m,]) #pull the row of interest
+  
+  if(length(levels(unname(unlist(x[2])))) > 1){ #This has to be here to avoid an error when trying to coerce output into the out.frame
+    x2.id <- droplevels(unname(unlist(x[2])))
+  }else{ #if the number of levels <= 1
+    x2.id <-unname(unlist(x[2]))
+  }
+  if(length(levels(unname(unlist(x[3])))) > 1){ #This has to be here to avoid an error when trying to coerce output into the out.frame
+    x3.id <- droplevels(unname(unlist(x[3])))
+  }else{ #if the number of levels <= 1
+    x3.id <-unname(unlist(x[3]))
+  }
+  out.frame<-data.frame(from = x2.id, to = x3.id, stringsAsFactors = TRUE) #must be made into a data frame to avoid the "listCoercing LHS to a list" warning.
+  y.ContactNames<-c(NA,NA,NA,substring((names(contactSummary[grep("contactDuration_", names(contactSummary))])),22)) #The three NAs represent the first 3 columns in y, which are irrelevent for our needs.
+  duration <- unname(unlist(contactSummary[which(contactSummary$id == x2.id & contactSummary$block == unname(unlist(x[1]))), which(y.ContactNames == x3.id)])) 
+  duration.corrected<-ifelse(duration > 0, duration, NA) 
+  out.frame$durations<-duration.corrected #this is the total number of durations individuals were observed in contact with others
+  out.frame$block <- unname(unlist(x[1])) #add block information
+  out.frame$block.start <- unname(unlist(as.character(x[4])))
+  out.frame$block.end <- unname(unlist(as.character(x[5])))
+  
+  return(out.frame)
+  
+}
+          edgeFrame<-data.frame(data.table::rbindlist(edgelist), stringsAsFactors = TRUE)
+          confirmed_edges <- edgeFrame[is.na(edgeFrame$duration) == FALSE,] #So now we have a data frame detailing the undirected edges we observed and the number of contacts associated with them. 
+          
+          if(removeDuplicates == FALSE){ #if the user wants duplicate edges, we bind confirmed_edges to a reflected version of itself
+            
+            confirmed_edges.reflected <- confirmed_edges
+            confirmed_edges.reflected[,c(1,2)] <- confirmed_edges.reflected[,c(2,1)] #flip to/from nodes
+            confirmed_edges <- data.frame(data.table::rbindlist(list(confirmed_edges, confirmed_edges.reflected))) #update confirmed_edges
+          }
+          
+          rownames(confirmed_edges)<-seq(1,nrow(confirmed_edges))
+          
+          return(confirmed_edges)
+          
+        }
+        
+        }else{ #if parallel == FALSE
+          
+          confirmed_edges.list <- foreach::foreach(k = 1:length(contactSummary), .packages = "foreach") %do% {
+            
+            contactSummary.frame <- contactSummary[[k]]
+            
+            contactSummary.node1 <- unique(contactSummary.frame$id)
+            contactSummary.node2 <- substring((names(contactSummary.frame[grep("contactDuration_", names(contactSummary.frame))])),22) #pulls out the contacted IDs
+            block_info<-data.frame(block = unique(contactSummary.frame$block), block.start = unique(contactSummary.frame$block.start), block.end = unique(contactSummary.frame$block.end), stringsAsFactors = TRUE) #pulls the block information from contactSummary
+            potential_edges1 <- expand.grid(contactSummary.node1, contactSummary.node2, block_info$block, stringsAsFactors = TRUE) #create a data frame detailing all the potential edges that may have occurred in the dataset (including loops, but loops will ultimately be removed later).
+            names(potential_edges1) <- c("from", "to", "block")
+            potential_edges2<-merge(potential_edges1, block_info, by = "block") #note that this merge reorders the columns, by placing the "block" column first.
+            potential_edges2<-potential_edges2[order(as.numeric(as.character(potential_edges2$block))),] #orders rows by ascending block number.
+            
+              blocks.adjusted<- foreach::foreach(j = unique(potential_edges2$block), .packages = "foreach") %do% { #creates a vector of rows describing duplicated edges.
+                
+                blockSub<- droplevels(subset(potential_edges2, block == j)) #subset the data by block
+                
+                potential.ntwrk <- igraph::simplify(igraph::graph_from_data_frame(blockSub[,c(2,3)], directed = FALSE), remove.multiple = TRUE) #create a simplified network object. Note that we exclude block info from this function (because it will return an error if included)
+                blockSub.edges <- igraph::as_data_frame(potential.ntwrk) #convert back to data frame
+                blockSub.out <- data.frame(block = unique(blockSub$block), from = blockSub.edges$from, to = blockSub.edges$to, block.start = unique(blockSub$block.start), block.end = unique(blockSub$block.end)) #append block info to the simplified data frame & ensure that columns are arranged as they were in potentialEdges2
+                return(blockSub.out) #return the blockSub.out data frame
+              }
+              
+              potential_edges2 <- data.frame(data.table::rbindlist(blocks.adjusted)) #bind the adjusted block sets together to redefine potential_edges2
+            
+            
+edgelist <- foreach(m = 1:nrow(potential_edges2)) %do% { #In a previous iteration, the content of this foreach was contained in a separate apply function called "confirm_edges.Block." for whatever reason, when calling that function an error would be returned. When you run the function contents in a foreach or forloop, however, everything works beautifully. Go figure. 
+  
+  x = droplevels(potential_edges2[m,]) #pull the row of interest
+  
+  if(length(levels(unname(unlist(x[2])))) > 1){ #This has to be here to avoid an error when trying to coerce output into the out.frame
+    x2.id <- droplevels(unname(unlist(x[2])))
+  }else{ #if the number of levels <= 1
+    x2.id <-unname(unlist(x[2]))
+  }
+  if(length(levels(unname(unlist(x[3])))) > 1){ #This has to be here to avoid an error when trying to coerce output into the out.frame
+    x3.id <- droplevels(unname(unlist(x[3])))
+  }else{ #if the number of levels <= 1
+    x3.id <-unname(unlist(x[3]))
+  }
+  out.frame<-data.frame(from = x2.id, to = x3.id, stringsAsFactors = TRUE) #must be made into a data frame to avoid the "listCoercing LHS to a list" warning.
+  y.ContactNames<-c(NA,NA,NA,substring((names(contactSummary[grep("contactDuration_", names(contactSummary))])),22)) #The three NAs represent the first 3 columns in y, which are irrelevent for our needs.
+  duration <- unname(unlist(contactSummary[which(contactSummary$id == x2.id & contactSummary$block == unname(unlist(x[1]))), which(y.ContactNames == x3.id)])) 
+  duration.corrected<-ifelse(duration > 0, duration, NA) 
+  out.frame$durations<-duration.corrected #this is the total number of durations individuals were observed in contact with others
+  out.frame$block <- unname(unlist(x[1])) #add block information
+  out.frame$block.start <- unname(unlist(as.character(x[4])))
+  out.frame$block.end <- unname(unlist(as.character(x[5])))
+  
+  return(out.frame)
+  
+}
+            
+            edgeFrame<-data.frame(data.table::rbindlist(edgelist), stringsAsFactors = TRUE)
+            confirmed_edges <- edgeFrame[is.na(edgeFrame$duration) == FALSE,] #So now we have a data frame detailing the undirected edges we observed and the number of contacts associated with them. 
+            
+            if(removeDuplicates == FALSE){ #if the user wants duplicate edges, we bind confirmed_edges to a reflected version of itself
+              
+              confirmed_edges.reflected <- confirmed_edges
+              confirmed_edges.reflected[,c(1,2)] <- confirmed_edges.reflected[,c(2,1)] #flip to/from nodes
+              confirmed_edges <- data.frame(data.table::rbindlist(list(confirmed_edges, confirmed_edges.reflected))) #update confirmed_edges
+            }
+            
+            rownames(confirmed_edges)<-seq(1,nrow(confirmed_edges))
+            
+            return(confirmed_edges)
+            
+          }
+          
+        }
+      
+      return(confirmed_edges.list)
+      
+    }else{ #if contactSummary is NOT a list of data frames
+      
+    contactSummary.node1 <- unique(contactSummary$id)
+    contactSummary.node2 <- substring((names(contactSummary[grep("contactDuration_", names(contactSummary))])),22) #pulls out the contacted IDs
+    block_info<-data.frame(block = unique(contactSummary$block), block.start = unique(contactSummary$block.start), block.end = unique(contactSummary$block.end), stringsAsFactors = TRUE) #pulls the block information from contactSummary
+    potential_edges1 <- expand.grid(contactSummary.node1, contactSummary.node2, block_info$block, stringsAsFactors = TRUE) #create a data frame detailing all the potential edges that may have occurred in the dataset (including loops, but loops will ultimately be removed later).
+    names(potential_edges1) <- c("from", "to", "block")
+    potential_edges2<-merge(potential_edges1, block_info, by = "block") #note that this merge reorders the columns, by placing the "block" column first.
+    potential_edges2<-potential_edges2[order(as.numeric(as.character(potential_edges2$block))),] #orders rows by ascending block number.
+      
+      blocks.adjusted<- foreach::foreach(j = unique(potential_edges2$block), .packages = "foreach") %do% { #For efficiency remove duplicated potential edges
+        
+        blockSub<- droplevels(subset(potential_edges2, block == j)) #subset the data by block
+          
+        potential.ntwrk <- igraph::simplify(igraph::graph_from_data_frame(blockSub[,c(2,3)], directed = FALSE), remove.multiple = TRUE) #create a simplified network object. Note that we exclude block info from this function (because it will return an error if included)
+        blockSub.edges <- igraph::as_data_frame(potential.ntwrk) #convert back to data frame
+        blockSub.out <- data.frame(block = unique(blockSub$block), from = blockSub.edges$from, to = blockSub.edges$to, block.start = unique(blockSub$block.start), block.end = unique(blockSub$block.end)) #append block info to the simplified data frame & ensure that columns are arranged as they were in potentialEdges2
+        return(blockSub.out) #return the blockSub.out data frame
+      }
+      
+      potential_edges2 <- data.frame(data.table::rbindlist(blocks.adjusted)) #bind the adjusted block sets together to redefine potential_edges2
+    
+    
+edgelist <- foreach(m = 1:nrow(potential_edges2)) %do% { #In a previous iteration, the content of this foreach was contained in a separate apply function called "confirm_edges.Block." for whatever reason, when calling that function an error would be returned. When you run the function contents in a foreach or forloop, however, everything works beautifully. Go figure. 
+  
+  x = droplevels(potential_edges2[m,]) #pull the row of interest
+  
+  if(length(levels(unname(unlist(x[2])))) > 1){ #This has to be here to avoid an error when trying to coerce output into the out.frame
+    x2.id <- droplevels(unname(unlist(x[2])))
+  }else{ #if the number of levels <= 1
+    x2.id <-unname(unlist(x[2]))
+  }
+  if(length(levels(unname(unlist(x[3])))) > 1){ #This has to be here to avoid an error when trying to coerce output into the out.frame
+    x3.id <- droplevels(unname(unlist(x[3])))
+  }else{ #if the number of levels <= 1
+    x3.id <-unname(unlist(x[3]))
+  }
+  out.frame<-data.frame(from = x2.id, to = x3.id, stringsAsFactors = TRUE) #must be made into a data frame to avoid the "listCoercing LHS to a list" warning.
+  y.ContactNames<-c(NA,NA,NA,substring((names(contactSummary[grep("contactDuration_", names(contactSummary))])),22)) #The three NAs represent the first 3 columns in y, which are irrelevent for our needs.
+  duration <- unname(unlist(contactSummary[which(contactSummary$id == x2.id & contactSummary$block == unname(unlist(x[1]))), which(y.ContactNames == x3.id)])) 
+  duration.corrected<-ifelse(duration > 0, duration, NA) 
+  out.frame$durations<-duration.corrected #this is the total number of durations individuals were observed in contact with others
+  out.frame$block <- unname(unlist(x[1])) #add block information
+  out.frame$block.start <- unname(unlist(as.character(x[4])))
+  out.frame$block.end <- unname(unlist(as.character(x[5])))
+  
+  return(out.frame)
+  
+}
+    edgeFrame<-data.frame(data.table::rbindlist(edgelist), stringsAsFactors = TRUE)
+    confirmed_edges <- edgeFrame[is.na(edgeFrame$duration) == FALSE,] #So now we have a data frame detailing the undirected edges we observed and the number of contacts associated with them. 
+    
+    if(removeDuplicates == FALSE){ #if the user wants duplicate edges, we bind confirmed_edges to a reflected version of itself
+      
+      confirmed_edges.reflected <- confirmed_edges
+      confirmed_edges.reflected[,c(1,2)] <- confirmed_edges.reflected[,c(2,1)] #flip to/from nodes
+      confirmed_edges <- data.frame(data.table::rbindlist(list(confirmed_edges, confirmed_edges.reflected))) #update confirmed_edges
+    }
+    
+    rownames(confirmed_edges)<-seq(1,nrow(confirmed_edges))
+    
+    return(confirmed_edges)
+    }
+  }
+
+```
+##Create the contact-network edge sets
+
+Now we run the ntwrkEdges2 function created above.
+
+```{r new contact networks, eval = FALSE}
+#2017
+system.time(contactEdges_2017 <- foreach(i = 1:3) %do% {
+  
+  empiricalEdges <- ntwrkEdges2(contactSet_2017.emp[[i]], removeDuplicates = FALSE, parallel = TRUE, nCores = 7) #run the empirical set
+  empiricalEdges$dyadID <- paste(empiricalEdges$from, empiricalEdges$to, sep = "-") #add a unique dyad identifier for each pair.
+
+  return(empiricalEdges)
+  
+})
+
+#2018
+system.time(contactEdges_2018 <- foreach(i = 1:3) %do% {
+  
+  empiricalEdges <- ntwrkEdges2(contactSet_2018.emp[[i]], removeDuplicates = FALSE, parallel = TRUE, nCores = 7) #run the empirical set
+  empiricalEdges$dyadID <- paste(empiricalEdges$from, empiricalEdges$to, sep = "-") #add a unique dyad identifier for each pair.
+
+  return(empiricalEdges)
+  
+})
+
+#we can see that in 2018, there are 4 individuals (i.e., 1525, 1580, 1587, and 1709) who were not observed in contact with anyone else for weeks at a time. This is likely due to faulty RTLS tags.
+
+```
+
+#Compile information into a single data frame
+
+Now we compile all the dyad-level information generated above (i.e., weekly sum contacts and social edge presence by hourset). Note that not all of the columns in the compilation file will be used as covariates in later survival analyses. Nevertheless, it's nice to have the option, and calculating a few extra variables here did not take up much processing power or time.
+
+```{r frame compilation, eval = FALSE}
+
+out_2017 <- data.frame(matrix(nrow = nrow(contactEdges_2017[[1]]), ncol = 16)) #create the base of the output frame
+colnames(out_2017) <- c("from", "to", "dyadID", "sumContacts.fullHourset", "sumContacts.activeHourset", "sumContacts.inactiveHourset", "assembly.fullHourset", "avoidance.fullHourset", "assembly.activeHourset", "avoidance.activeHourset", "assembly.inactiveHourset", "avoidance.inactiveHourset", "block", "block.start", "block.end", "year") #define colnames
+
+#now fill in all the appropriate data
+out_2017$year <- 2017
+out_2017$block <- contactEdges_2017[[1]]$block
+out_2017$block.start <- contactEdges_2017[[1]]$block.start
+out_2017$block.end <- contactEdges_2017[[1]]$block.end
+out_2017$from <- contactEdges_2017[[1]]$from
+out_2017$to <- contactEdges_2017[[1]]$to
+out_2017$dyadID <- contactEdges_2017[[1]]$dyadID
+out_2017$sumContacts.fullHourset <- contactEdges_2017[[1]]$durations
+out_2017$sumContacts.activeHourset <- contactEdges_2017[[2]]$durations[match(paste(out_2017$dyadID, out_2017$block, sep = "_"), paste(contactEdges_2017[[2]]$dyadID,contactEdges_2017[[2]]$block,sep = "_"))] ; out_2017$sumContacts.activeHourset <- ifelse(is.na(out_2017$sumContacts.activeHourset) == FALSE, out_2017$sumContacts.activeHourset, 0) #we do the match here because it is possible that some dyads may not exist in a block edge sets generated from hour subsets. Note that we must account for BOTH dyadID AND block here. The ifelse statement replaces any remaining NAs with 0s.
+out_2017$sumContacts.inactiveHourset <- contactEdges_2017[[3]]$durations[match(paste(out_2017$dyadID, out_2017$block, sep = "_"), paste(contactEdges_2017[[3]]$dyadID,contactEdges_2017[[3]]$block,sep = "_"))] ; out_2017$sumContacts.inactiveHourset <- ifelse(is.na(out_2017$sumContacts.inactiveHourset) == FALSE, out_2017$sumContacts.inactiveHourset, 0) #we do the match here because it is possible that some dyads may not exist in a block edge sets generated from hour subsets. Note that we must account for BOTH dyadID AND block here. The ifelse statement replaces any remaining NAs with 0s.
+out_2017$assembly.fullHourset <- socialEdges_2017[[1]][["Greater"]]$weight[match(paste(out_2017$dyadID, out_2017$block, sep = "_"), paste(paste(socialEdges_2017[[1]][["Greater"]]$from, socialEdges_2017[[1]][["Greater"]]$to, sep = "-"), socialEdges_2017[[1]][["Greater"]]$block, sep = "_"))]; out_2017$assembly.fullHourset <- ifelse(is.na(out_2017$assembly.fullHourset) == FALSE, 1, 0) # we do the same matching here as above (though it's a bit more complicated because no dyadID column exists in the social edge set). The ifelse statement is used to transform the numerical variable into a binary one, where 1 indicates the presence of a social edge, and 0 the absence.
+out_2017$avoidance.fullHourset <- socialEdges_2017[[1]][["Fewer"]]$weight[match(paste(out_2017$dyadID, out_2017$block, sep = "_"), paste(paste(socialEdges_2017[[1]][["Fewer"]]$from, socialEdges_2017[[1]][["Fewer"]]$to, sep = "-"), socialEdges_2017[[1]][["Fewer"]]$block, sep = "_"))]; out_2017$avoidance.fullHourset <- ifelse(is.na(out_2017$avoidance.fullHourset) == FALSE, 1, 0) # we do the same matching here as above (though it's a bit more complicated because no dyadID column exists in the social edge set). The ifelse statement is used to transform the numerical variable into a binary one, where 1 indicates the presence of a social edge, and 0 the absence.
+out_2017$assembly.activeHourset <- socialEdges_2017[[2]][["Greater"]]$weight[match(paste(out_2017$dyadID, out_2017$block, sep = "_"), paste(paste(socialEdges_2017[[2]][["Greater"]]$from, socialEdges_2017[[2]][["Greater"]]$to, sep = "-"), socialEdges_2017[[2]][["Greater"]]$block, sep = "_"))]; out_2017$assembly.activeHourset <- ifelse(is.na(out_2017$assembly.activeHourset) == FALSE, 1, 0) # we do the same matching here as above (though it's a bit more complicated because no dyadID column exists in the social edge set). The ifelse statement is used to transform the numerical variable into a binary one, where 1 indicates the presence of a social edge, and 0 the absence.
+out_2017$avoidance.activeHourset <- socialEdges_2017[[2]][["Fewer"]]$weight[match(paste(out_2017$dyadID, out_2017$block, sep = "_"), paste(paste(socialEdges_2017[[2]][["Fewer"]]$from, socialEdges_2017[[2]][["Fewer"]]$to, sep = "-"), socialEdges_2017[[2]][["Fewer"]]$block, sep = "_"))]; out_2017$avoidance.activeHourset <- ifelse(is.na(out_2017$avoidance.activeHourset) == FALSE, 1, 0) # we do the same matching here as above (though it's a bit more complicated because no dyadID column exists in the social edge set). The ifelse statement is used to transform the numerical variable into a binary one, where 1 indicates the presence of a social edge, and 0 the absence.
+out_2017$assembly.inactiveHourset <- socialEdges_2017[[3]][["Greater"]]$weight[match(paste(out_2017$dyadID, out_2017$block, sep = "_"), paste(paste(socialEdges_2017[[3]][["Greater"]]$from, socialEdges_2017[[3]][["Greater"]]$to, sep = "-"), socialEdges_2017[[3]][["Greater"]]$block, sep = "_"))]; out_2017$assembly.inactiveHourset <- ifelse(is.na(out_2017$assembly.inactiveHourset) == FALSE, 1, 0) # we do the same matching here as above (though it's a bit more complicated because no dyadID column exists in the social edge set). The ifelse statement is used to transform the numerical variable into a binary one, where 1 indicates the presence of a social edge, and 0 the absence.
+out_2017$avoidance.inactiveHourset <- socialEdges_2017[[3]][["Fewer"]]$weight[match(paste(out_2017$dyadID, out_2017$block, sep = "_"), paste(paste(socialEdges_2017[[3]][["Fewer"]]$from, socialEdges_2017[[3]][["Fewer"]]$to, sep = "-"), socialEdges_2017[[3]][["Fewer"]]$block, sep = "_"))]; out_2017$avoidance.inactiveHourset <- ifelse(is.na(out_2017$avoidance.inactiveHourset) == FALSE, 1, 0) # we do the same matching here as above (though it's a bit more complicated because no dyadID column exists in the social edge set). The ifelse statement is used to transform the numerical variable into a binary one, where 1 indicates the presence of a social edge, and 0 the absence.
+
+out_2018 <- data.frame(matrix(nrow = nrow(contactEdges_2018[[1]]), ncol = 16)) #create the base of the output frame
+colnames(out_2018) <- c("from", "to", "dyadID", "sumContacts.fullHourset", "sumContacts.activeHourset", "sumContacts.inactiveHourset", "assembly.fullHourset", "avoidance.fullHourset", "assembly.activeHourset", "avoidance.activeHourset", "assembly.inactiveHourset", "avoidance.inactiveHourset", "block", "block.start", "block.end", "year") #define colnames
+
+#now fill in all the appropriate data
+out_2018$year <- 2018
+out_2018$block <- contactEdges_2018[[1]]$block
+out_2018$block.start <- contactEdges_2018[[1]]$block.start
+out_2018$block.end <- contactEdges_2018[[1]]$block.end
+out_2018$from <- contactEdges_2018[[1]]$from
+out_2018$to <- contactEdges_2018[[1]]$to
+out_2018$dyadID <- contactEdges_2018[[1]]$dyadID
+out_2018$sumContacts.fullHourset <- contactEdges_2018[[1]]$durations
+out_2018$sumContacts.activeHourset <- contactEdges_2018[[2]]$durations[match(paste(out_2018$dyadID, out_2018$block, sep = "_"), paste(contactEdges_2018[[2]]$dyadID,contactEdges_2018[[2]]$block,sep = "_"))] ; out_2018$sumContacts.activeHourset <- ifelse(is.na(out_2018$sumContacts.activeHourset) == FALSE, out_2018$sumContacts.activeHourset, 0) #we do the match here because it is possible that some dyads may not exist in a block edge sets generated from hour subsets. Note that we must account for BOTH dyadID AND block here. The ifelse statement replaces any remaining NAs with 0s.
+out_2018$sumContacts.inactiveHourset <- contactEdges_2018[[3]]$durations[match(paste(out_2018$dyadID, out_2018$block, sep = "_"), paste(contactEdges_2018[[3]]$dyadID,contactEdges_2018[[3]]$block,sep = "_"))] ; out_2018$sumContacts.inactiveHourset <- ifelse(is.na(out_2018$sumContacts.inactiveHourset) == FALSE, out_2018$sumContacts.inactiveHourset, 0) #we do the match here because it is possible that some dyads may not exist in a block edge sets generated from hour subsets. Note that we must account for BOTH dyadID AND block here. The ifelse statement replaces any remaining NAs with 0s.
+out_2018$assembly.fullHourset <- socialEdges_2018[[1]][["Greater"]]$weight[match(paste(out_2018$dyadID, out_2018$block, sep = "_"), paste(paste(socialEdges_2018[[1]][["Greater"]]$from, socialEdges_2018[[1]][["Greater"]]$to, sep = "-"), socialEdges_2018[[1]][["Greater"]]$block, sep = "_"))]; out_2018$assembly.fullHourset <- ifelse(is.na(out_2018$assembly.fullHourset) == FALSE, 1, 0) # we do the same matching here as above (though it's a bit more complicated because no dyadID column exists in the social edge set). The ifelse statement is used to transform the numerical variable into a binary one, where 1 indicates the presence of a social edge, and 0 the absence.
+out_2018$avoidance.fullHourset <- socialEdges_2018[[1]][["Fewer"]]$weight[match(paste(out_2018$dyadID, out_2018$block, sep = "_"), paste(paste(socialEdges_2018[[1]][["Fewer"]]$from, socialEdges_2018[[1]][["Fewer"]]$to, sep = "-"), socialEdges_2018[[1]][["Fewer"]]$block, sep = "_"))]; out_2018$avoidance.fullHourset <- ifelse(is.na(out_2018$avoidance.fullHourset) == FALSE, 1, 0) # we do the same matching here as above (though it's a bit more complicated because no dyadID column exists in the social edge set). The ifelse statement is used to transform the numerical variable into a binary one, where 1 indicates the presence of a social edge, and 0 the absence.
+out_2018$assembly.activeHourset <- socialEdges_2018[[2]][["Greater"]]$weight[match(paste(out_2018$dyadID, out_2018$block, sep = "_"), paste(paste(socialEdges_2018[[2]][["Greater"]]$from, socialEdges_2018[[2]][["Greater"]]$to, sep = "-"), socialEdges_2018[[2]][["Greater"]]$block, sep = "_"))]; out_2018$assembly.activeHourset <- ifelse(is.na(out_2018$assembly.activeHourset) == FALSE, 1, 0) # we do the same matching here as above (though it's a bit more complicated because no dyadID column exists in the social edge set). The ifelse statement is used to transform the numerical variable into a binary one, where 1 indicates the presence of a social edge, and 0 the absence.
+out_2018$avoidance.activeHourset <- socialEdges_2018[[2]][["Fewer"]]$weight[match(paste(out_2018$dyadID, out_2018$block, sep = "_"), paste(paste(socialEdges_2018[[2]][["Fewer"]]$from, socialEdges_2018[[2]][["Fewer"]]$to, sep = "-"), socialEdges_2018[[2]][["Fewer"]]$block, sep = "_"))]; out_2018$avoidance.activeHourset <- ifelse(is.na(out_2018$avoidance.activeHourset) == FALSE, 1, 0) # we do the same matching here as above (though it's a bit more complicated because no dyadID column exists in the social edge set). The ifelse statement is used to transform the numerical variable into a binary one, where 1 indicates the presence of a social edge, and 0 the absence.
+out_2018$assembly.inactiveHourset <- socialEdges_2018[[3]][["Greater"]]$weight[match(paste(out_2018$dyadID, out_2018$block, sep = "_"), paste(paste(socialEdges_2018[[3]][["Greater"]]$from, socialEdges_2018[[3]][["Greater"]]$to, sep = "-"), socialEdges_2018[[3]][["Greater"]]$block, sep = "_"))]; out_2018$assembly.inactiveHourset <- ifelse(is.na(out_2018$assembly.inactiveHourset) == FALSE, 1, 0) # we do the same matching here as above (though it's a bit more complicated because no dyadID column exists in the social edge set). The ifelse statement is used to transform the numerical variable into a binary one, where 1 indicates the presence of a social edge, and 0 the absence.
+out_2018$avoidance.inactiveHourset <- socialEdges_2018[[3]][["Fewer"]]$weight[match(paste(out_2018$dyadID, out_2018$block, sep = "_"), paste(paste(socialEdges_2018[[3]][["Fewer"]]$from, socialEdges_2018[[3]][["Fewer"]]$to, sep = "-"), socialEdges_2018[[3]][["Fewer"]]$block, sep = "_"))]; out_2018$avoidance.inactiveHourset <- ifelse(is.na(out_2018$avoidance.inactiveHourset) == FALSE, 1, 0) # we do the same matching here as above (though it's a bit more complicated because no dyadID column exists in the social edge set). The ifelse statement is used to transform the numerical variable into a binary one, where 1 indicates the presence of a social edge, and 0 the absence.
+
+#now we add a column describing the average daily contacts per week to each data set. We will use this column in our survival analysis rather than the sum contacts, because there were some weeks with fewer days than others. 
+
+out_2017$avgDailyContacts.fullHourset <- NA #create empty column first
+out_2017$avgDailyContacts.fullHourset[which(out_2017$block == 1)] <- out_2017$sumContacts.fullHourset[which(out_2017$block == 1)]/4 #there are 4 days in the first block of 2017
+out_2017$avgDailyContacts.fullHourset[which(as.numeric(as.character(out_2017$block)) > 1)] <- out_2017$sumContacts.fullHourset[which(as.numeric(as.character(out_2017$block)) > 1)]/7 #all blocks in 2017 after the first one have the full 7 days.
+
+out_2018$avgDailyContacts.fullHourset <- NA #create empty column first
+out_2018$avgDailyContacts.fullHourset[which(out_2018$block == 1)] <- out_2018$sumContacts.fullHourset[which(out_2018$block == 1)]/4 #there are 4 days in the first block of 2018
+out_2018$avgDailyContacts.fullHourset[which(as.numeric(as.character(out_2018$block)) > 1)] <- out_2018$sumContacts.fullHourset[which(as.numeric(as.character(out_2018$block)) > 1)]/7 #all blocks in 2018 after the first one have the full 7 days.
+
+out_2018$block <- as.numeric(as.character(out_2018$block)) + 52 #add 52 to the block IDs to differentiate them from the 2017 ids.
+
+dyadMetrics <- data.frame(data.table::rbindlist(list(out_2017, out_2018))) #bind the data together
+
+```
+
+#add weekly social node degree
+
+In dyadMetrics, we have a nice summary of dyad_level information for both years. However, we're also interested looking at the effect of social node degree on the weekly infection hazard rate, so, we'll calculate this individual-level metric here. Note that the only social network from which we're carrying forward metrics as covariates for later modeling is the assembly edge set, so that's the only one we calculate this metric for.
+
+```{r popularity, eval = FALSE}
+
+Social_nodeDegree <- aggregate(assembly.activeHourset~from + block, data = dyadMetrics, FUN = "sum") # aggregate the data
+colnames(Social_nodeDegree)[match("assembly.activeHourset", colnames(Social_nodeDegree))] <- "assembly.activeHourset_nodeDegree" #rename the appropriate column to facilitate easy merging
+
+dyadMetrics.merge1<- merge(x = dyadMetrics, y = Social_nodeDegree, by = c("from", "block"), all.x = TRUE) #merge once to append relevant information for "from" nodes
+colnames(dyadMetrics.merge1)[match("assembly.activeHourset_nodeDegree", colnames(dyadMetrics.merge1))] <- "assembly.activeHourset_nodeDegree.from" #we're gonna merge again for the "to" column nodes, so we must differentiate results here.
+
+dyadMetrics.merge2<- merge(x = dyadMetrics.merge1, y = Social_nodeDegree, by.x = c("to", "block"), by.y = c("from", "block"), all.x = TRUE) #merge again to append relevant information for "to" nodes
+colnames(dyadMetrics.merge2)[match("assembly.activeHourset_nodeDegree", colnames(dyadMetrics.merge2))] <- "assembly.activeHourset_nodeDegree.to" #differentiate results here.
+
+```
+
+#Save output
+
+Finally, we output a data frame with covariates that we want to be merged to survival data for accelerated failure time modeling.
+
+```{r output, eval = FALSE}
+
+covariateFrame <- data.frame(from = dyadMetrics.merge2$from, to = dyadMetrics.merge2$to, dyadID = dyadMetrics.merge2$dyadID, contacts.avg = dyadMetrics.merge2$avgDailyContacts.fullHourset, social = dyadMetrics.merge2$assembly.activeHourset, socialDeg.from = dyadMetrics.merge2$assembly.activeHourset_nodeDegree.from, socialDeg.to = dyadMetrics.merge2$assembly.activeHourset_nodeDegree.to, block = dyadMetrics.merge2$block)
+
+save(covariateFrame, file = "AFTCovariates.RData")
+
+```
