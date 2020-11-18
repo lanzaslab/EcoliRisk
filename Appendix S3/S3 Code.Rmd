@@ -1,7 +1,7 @@
 ---
-title: "pairedSurvivalTesting"
+title: "Appendix S3: Pairwise survival analysis of E. coli transmission data"
 author: "Trevor Farthing"
-date: "6/14/2020"
+date: "09/18/2020"
 output:
   word_document: default
   html_document: default
