@@ -1,5 +1,5 @@
 ---
-title: "Appendix S2: Contact- and social-network creation"
+title: "Contact- and social-network creation"
 author: "Trevor Farthing"
 date: "03/21/2019"
 output:
@@ -13,7 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 #The goal of this code is to generate dyad-level covariates to be included in survival analyses.
 
-Specifically, we create weekly undirected social and weighted-contact network edge sets to be appended to our survival data (see Appendix S3).
+Specifically, we create weekly undirected social and weighted-contact network edge sets to be appended to our survival data (see "Pairwise Hazard Modeling.Rmd").
 
 ## First, we must load the empirical point-location data sets
 
@@ -383,7 +383,7 @@ plots_2018 <- plot.func(emp = emp.summary_2018, rand = rand.summary_2018, hour.v
 
 It looks like between hours 06:00 and 20:00 in 2017 and hours 06:00 and 19:00 in 2018, the null model consistently underpredicts both per-capita contacts and node degree. However, during the other hours in the data sets, the null model over predicts the per-capita node degree. This suggests that these inactive hours are defined by relatively long duration contacts between fewer individuals (what we might expect if animals were sleeping close to one another). It's interesting to note that hourly per-capita contact rates in 2018 are relatively stable throughout the day, as opposed to the trend observed in 2017 where contact rates spike during active hours and peak around feeding time. This contrast may be due to the sparsity of the 2018 point-location data relative to that of 2017, or just differences in herd behavior between years. Given the likely behavioral differences between active and inactive hours, and the additional differences in data sparsity between these hours (see Appendix S1), we chose to define active hoursets for 2017 and 2018 as timepoints between 06:00:00 to 21:59:59 UTM and 06:00:00 to 19:59:59 UTM, respectively. Inactive hoursets for 2017 and 2018 were therefore timepoints between 22:00:00 to 05:59:59 UTM and 20:00:00 to 05:59:59 UTM, respectively.
 
-Note that we decided to only carry active-hour set metrics into the survival analysis (see Appendix S3). That said, here we calculate metrics for the full-, active-, and inactive sets in order to gain a better understanding of the system.
+Note that we decided to only carry active-hour set metrics into the survival analysis. That said, here we calculate metrics for the full-, active-, and inactive sets in order to gain a better understanding of the system.
 
 ## Aggregate Hourly Subsets
 

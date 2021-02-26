@@ -1,5 +1,5 @@
 ---
-title: "Appendix S3: Pairwise survival analysis of E. coli transmission data"
+title: "Pairwise survival analysis of E. coli transmission data"
 author: "Trevor Farthing"
 date: "09/18/2020"
 output:
@@ -200,7 +200,7 @@ Note that while individuals were technically monitored for 6 weeks and 10 weeks 
 
 ##Add dyad-level covariates
 
-We created a data frame describing observed contacts and social relationships between nodes in Appendix S2 (i.e., "AFTCovariates.RData"). Here we load this data frame and merge it to the paired survival data set.
+We created a data frame describing observed contacts and social relationships between nodes in Network Creation Code.Rmd (i.e., "AFTCovariates.RData"). Here we load this data frame and merge it to the paired survival data set.
 
 ```{r dyad-level metrics}
 load("AFTCovariates.RData") #load covariateFrame
