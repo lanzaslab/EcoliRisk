@@ -2,7 +2,7 @@
 ---
 title: "Pairwise survival analysis of E. coli transmission data"
 author: "Trevor Farthing"
-date: "06/30/2021"
+date: "07/11/2021"
 output:
   word_document: default
   html_document: default
@@ -26,8 +26,7 @@ REDI_id: Tags used to identify calves during the study (note that REDI tags were
 innoc_date: Date that certain calves were innoculated. If NA, individuals were not innoculated with *E. coli*, and any observed *E. coli* colonization was the result of successful transmission.
 Week: Unique Integer week ID within the given year that the sample was collected.
 sampling_date: Date of sample collection.
-shedding_fecal: Binary. If "1", individuals tested positive for fecal *E. coli* in a given week. If "0", they tested negative.
-CFU: The log number of Colony-Forming-Units sampled from individuals in a given week.
+shedding_fecal: Binary. If "1", individuals tested positive (i.e., > 0 CFUs) for fecal *E. coli* in a given week. If "0", they tested negative.
 
 ```{r load data}
 #Load external libraries
@@ -91,9 +90,6 @@ innoc_frame <- data.frame(
   Week = c(rep(0, 5), rep(52, 5)),
   sampling_date = NA, #no need to import
   shedding_fecal = 1,
-  #CFU = NA, #no need to import
-  CFU = c(mean(c(2.6,0.7,0,0.7)), mean(c(0.7,	0,	0.7,	0.7)), mean(c(0.7,	0.7,	0,	2.95)), mean(c(0.7,	0.7,	0,	0.7)), mean(c(0,	0.7,	0,	0.7)), mean(c(0.7,	0.7,	0.7,	0.7)), mean(c(0.7,	0.7,	0.7,	0.7)), mean(c(0.7,	0.7,	0.7,	0.7)), mean(c(0.7,	0.7,	0.7,	0.7)), mean(c(0.7,	0.7,	0.7,	0.7))), # CFU values here represent the mean log CFU counts over the 2nd-5th days post innoculation
-  nodeType = "calf",
   previousInfection = NA, #no need to import
   year_2017 = c(rep(1, 5), rep(0,5)),
   start = NA, #no need to import
