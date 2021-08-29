@@ -77,7 +77,7 @@ Here we use the findDistThresh function from the "contact" R package (v.1.2.5) t
 #Point-location-based contacts
 contactThresh.point<-contact::findDistThresh(n = 1000000, acc.Dist1 = 0.5, acc.Dist2 = NULL, pWithin1 = 90, pWithin2 = NULL, spTh = 0.5)
 
-contactThresh.point_99<-unname(signif(contactThresh.point[21], 2)) #round the 99-percent CI value to 2 decimal places
+contactThresh.point_99<-unname(signif(contactThresh.point$CI_upper[11], 2))  #round the 99-percent CI value to 2 decimal places
 
 #Note that because these confidence intervals are obtained from distributions generated from random samples, every time this function is run, results will be slightly different. When we ran the function, the outputs indicated that adjusted spatial thresholds of 0.71 m likely capture the majority of contacts as previously defined for contacts in this system.
 
