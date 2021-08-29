@@ -138,7 +138,7 @@ for(i in 1:100){
   
   load("data2017_10SecAgg_rand.RData") #ensure the randomized set list is loaded into the environment.
 
-  data1 <- data2017_10SecAgg_rand[[i]] #pull a single randomized set from the list. 
+  data1 <- data2017_10SecAgg.rand[[i]] #pull a single randomized set from the list. 
 
   rm(data2017_10SecAgg_rand); gc() #remove to free up local memory
 
@@ -170,7 +170,7 @@ for(i in 1:100){
   
   load("data2018_10SecAgg_rand.RData") #ensure the randomized set list is loaded into the environment.
 
-  data1 <- data2018_10SecAgg_rand[[i]] #pull a single randomized set from the list. 
+  data1 <- data2018_10SecAgg.rand[[i]] #pull a single randomized set from the list. 
 
   rm(data2018_10SecAgg_rand); gc() #remove to free up local memory
 
