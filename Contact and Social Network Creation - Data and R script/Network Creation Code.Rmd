@@ -70,7 +70,7 @@ system.time(data2018_10SecAgg.rand <- contact::randomizePaths(x = data2018_10Sec
 
 ##Adjust contact definintions to account for RTLS accuracy
 
-Here we use the findDistThresh function from the "contact" R package (v.1.2.5) to identify what spatial thresholds for contact likely report the majority of contacts in the calves system, previously defined as instances where individuals were within 0.5 m of one another for point-location-based contacts (Farthing et al. 2020). Note that the accuracy of the RTLS used to collect the calves data was said to be "90% of points fall within 0.5 m of true locations" (Farthing et al. 2020).
+Here we use the findDistThresh function from the "contact" R package (v.1.2.6) to identify what spatial thresholds for contact likely report the majority of contacts in the calves system, previously defined as instances where individuals were within 0.5 m of one another for point-location-based contacts (Farthing et al. 2020). Note that the accuracy of the RTLS used to collect the calves data was said to be "90% of points fall within 0.5 m of true locations" (Farthing et al. 2020).
 
 ```{r (Account for RTLS accuracy), eval=FALSE}
 
