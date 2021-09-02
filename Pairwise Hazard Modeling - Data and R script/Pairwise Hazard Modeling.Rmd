@@ -23,7 +23,7 @@ The data set we refer to as "eColiShedding.csv" contains the sampling data from 
 year: Year that the study took place (i.e., 2017 or 2018)
 calf_id: Unique ids for calves within the study
 REDI_id: Tags used to identify calves during the study (note that REDI tags were often reused for multiple individuals across different years)
-innoc_date: Date that certain calves were innoculated. If NA, individuals were not innoculated with *E. coli*, and any observed *E. coli* colonization was the result of successful transmission.
+inoc_date: Date that certain calves were inoculated. If NA, individuals were not inoculated with *E. coli*, and any observed *E. coli* colonization was the result of successful transmission.
 Week: Unique Integer week ID within the given year that the sample was collected.
 sampling_date: Date of sample collection.
 shedding_fecal: Binary. If "1", individuals tested positive (i.e., > 0 CFUs) for fecal *E. coli* in a given week. If "0", they tested negative.
@@ -78,15 +78,15 @@ calf_transmission.updated$year_2017 <- ifelse(calf_transmission.updated$year == 
 #now we define the start and end time (in days) for each time period
 calf_transmission.updated$start <- calf_transmission.updated$Week - 1  # week 1 starts on day 1 and ends at day 7. Week 2 starts on day 8 and ends at day 14. Etc.
 calf_transmission.updated$stop <- calf_transmission.updated$Week # week 1 starts on day 1 and ends at day 7. Week 2 starts on day 8 and ends at day 14. Etc.
-#Add week 0 and week 52 data to the data set (weeks when only the innoculated calves were infectious).
-innoc_2017 <- unique(calf_transmission.updated[which(calf_transmission.updated$year == 2017 & is.na(calf_transmission.updated$innoc_date) == FALSE), match("calf_id", colnames(calf_transmission.updated))])
-innoc_2018 <- unique(calf_transmission.updated[which(calf_transmission.updated$year == 2018 & is.na(calf_transmission.updated$innoc_date) == FALSE), match("calf_id", colnames(calf_transmission.updated))])
-innoc_frame <- data.frame(
+#Add week 0 and week 52 data to the data set (weeks when only the inoculated calves were infectious).
+inoc_2017 <- unique(calf_transmission.updated[which(calf_transmission.updated$year == 2017 & is.na(calf_transmission.updated$inoc_date) == FALSE), match("calf_id", colnames(calf_transmission.updated))])
+inoc_2018 <- unique(calf_transmission.updated[which(calf_transmission.updated$year == 2018 & is.na(calf_transmission.updated$inoc_date) == FALSE), match("calf_id", colnames(calf_transmission.updated))])
+inoc_frame <- data.frame(
   
   year = c(rep(2017, 5), rep(2018, 5)), 
-  calf_id = c(innoc_2017, innoc_2018),
+  calf_id = c(inoc_2017, inoc_2018),
   REDI_id = NA, #no need to import the REDI IDs
-  innoc_date = c(rep("05-22-2017",5), rep("05-21-2018", 5)),
+  inoc_date = c(rep("05-22-2017",5), rep("05-21-2018", 5)),
   Week = c(rep(0, 5), rep(52, 5)),
   sampling_date = NA, #no need to import
   shedding_fecal = 1,
@@ -95,7 +95,7 @@ innoc_frame <- data.frame(
   start = NA, #no need to import
   stop = NA #no need to import
 )
-calf_transmission.updated <- data.frame(data.table::rbindlist(list(innoc_frame, calf_transmission.updated))) #bind the data together
+calf_transmission.updated <- data.frame(data.table::rbindlist(list(inoc_frame, calf_transmission.updated))) #bind the data together
 ```
 
 ## Generate paired infection data
@@ -117,7 +117,7 @@ infectiousNum.week: Count of the number of individuals (i.e., calves) shedding E
 
 ```{r paired data}
 #now we pull susceptible individuals at each time point.
-susceptible_times <- droplevels(calf_transmission.updated[which(is.na(calf_transmission.updated$innoc_date) == TRUE & calf_transmission.updated$previousInfection == 0),]) #pull observations of calves that were susceptible going into the week. (i.e., calves that were not innoculated and DID NOT test positive any previous weeks)
+susceptible_times <- droplevels(calf_transmission.updated[which(is.na(calf_transmission.updated$inoc_date) == TRUE & calf_transmission.updated$previousInfection == 0),]) #pull observations of calves that were susceptible going into the week. (i.e., calves that were not inoculated and DID NOT test positive any previous weeks)
 #now we pull the individuals that can infect others
 infectious_times <- droplevels(subset(calf_transmission.updated, shedding_fecal == 1))
 #now we make the pairwise shedding risk data frame
