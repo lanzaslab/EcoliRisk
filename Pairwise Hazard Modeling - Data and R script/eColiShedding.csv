@@ -1,4 +1,4 @@
-year,calf_id,REDI_id,innoc_date,Week,sampling_date,shedding_fecal
+year,calf_id,REDI_id,inoc_date,Week,sampling_date,shedding_fecal
 2017,1,681,NA,1,5/29/17,0
 2017,2,763,5/22/17,1,5/29/17,0
 2017,3,610,NA,1,5/29/17,0
